@@ -22,48 +22,21 @@ class _HomeScreenState extends State<HomeScreen> {
   SelectedSituation? _selectedSituation =
       SelectedSituation.calibration; //라디오 버튼 값
 
-  Duration duration = Duration.zero; //총 시간
-  Duration position = Duration.zero; //진행중인 시간
-
   //녹음에 필요한 것들
   final recorder = sound.FlutterSoundRecorder();
   bool isRecording = false; //녹음 상태
   String audioPath = ''; //녹음중단 시 경로 받아올 변수
   String playAudioPath = ''; //저장할때 받아올 변수 , 재생 시 필요
 
-  //재생에 필요한 것들
-  final AudioPlayer audioPlayer = AudioPlayer();
-  bool isPlaying = false;
-
   @override
   void initState() {
     super.initState();
-    playAudio();
     initRecorder();
-
-    audioPlayer.onPlayerStateChanged.listen((state) {
-      setState(() {
-        isPlaying = state == PlayerState.playing;
-      });
-    });
-
-    audioPlayer.onDurationChanged.listen((newDuration) {
-      setState(() {
-        duration = newDuration;
-      });
-    });
-
-    audioPlayer.onPositionChanged.listen((newPosition) {
-      setState(() {
-        position = newPosition;
-      });
-    });
   }
 
   @override
   void dispose() {
     recorder.closeRecorder();
-    audioPlayer.dispose();
     super.dispose();
   }
 
@@ -71,67 +44,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Slider(
-          min: 0,
-          max: duration.inSeconds.toDouble(),
-          value: position.inSeconds.toDouble(),
-          onChanged: (value) async {
-            setState(() {
-              position = Duration(seconds: value.toInt());
-            });
-            await audioPlayer.seek(position);
-          },
-          activeColor: Colors.black,
-          inactiveColor: Colors.grey,
-        ),
-        SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(formatTime(position), style: TextStyle(color: Colors.brown)),
-              SizedBox(width: 20),
-              CircleAvatar(
-                radius: 15,
-                backgroundColor: Colors.transparent,
-                child: IconButton(
-                  padding: EdgeInsets.only(bottom: 50),
-                  icon: Icon(
-                    isPlaying ? Icons.pause : Icons.play_arrow,
-                    color: Colors.brown,
-                  ),
-                  iconSize: 25,
-                  onPressed: () async {
-                    print("isplaying 전 : $isPlaying");
-                    if (isPlaying) {
-                      //재생중이면
-                      await audioPlayer.pause(); //멈추고
-                      setState(() {
-                        isPlaying = false; //상태변경하기
-                      });
-                    } else {
-                      //멈춘 상태였으면
-                      await playAudio();
-                      await audioPlayer.resume(); // 녹음된 오디오 재생
-                    }
-                  },
-                ),
-              ),
-              SizedBox(width: 20),
-              Text(formatTime(duration), style: TextStyle(color: Colors.brown)),
-            ],
-          ),
-        ),
-        SizedBox(height: 20),
         SizedBox(
           child: IconButton(
             onPressed: () async {
               if (recorder.isRecording) {
-                print("stop() 호출됨");
                 await stop();
               } else {
-                print("record() 호출됨");
                 await record();
               }
               setState(() {});
@@ -193,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   : _selectedSituation == SelectedSituation.motionGeneration
                   ? "motionGeneration"
                   : "viewMotion",
-            ); //audiopath가 맞나?
+            );
           },
           child: Container(
             decoration: BoxDecoration(
@@ -271,38 +189,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       print('Error saving recording: $e');
       return ''; // 오류 발생 시 빈 문자열 반환
-    }
-  }
-
-  String formatTime(Duration duration) {
-    int minutes = duration.inMinutes.remainder(60);
-    int seconds = duration.inSeconds.remainder(60);
-
-    String result = '$minutes:${seconds.toString().padLeft(2, '0')}';
-    return result;
-  }
-
-  Future<void> playAudio() async {
-    try {
-      if (isPlaying == PlayerState.playing) {
-        await audioPlayer.stop(); // 이미 재생 중인 경우 정지시킵니다.
-      }
-
-      await audioPlayer.setSourceDeviceFile(playAudioPath);
-      await Future.delayed(Duration(milliseconds: 500));
-
-      setState(() {
-        duration = duration;
-        isPlaying = true;
-      });
-
-      audioPlayer.play;
-
-      print('오디오 재생 시작: $playAudioPath');
-      print("duration: $duration");
-    } catch (e) {
-      print("audioPath : $playAudioPath");
-      print("오디오 재생 중 오류 발생 : $e");
     }
   }
 }
