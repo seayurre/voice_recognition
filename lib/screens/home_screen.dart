@@ -1,8 +1,11 @@
 //code inspired from https://velog.io/@yevvon/flutterdart-%EC%9D%8C%EC%84%B1-%EB%85%B9%EC%9D%8C-%EC%9E%AC%EC%83%9D
 
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart' as sound;
+import 'package:noise_meter/noise_meter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
@@ -28,15 +31,22 @@ class _HomeScreenState extends State<HomeScreen> {
   String audioPath = ''; //녹음중단 시 경로 받아올 변수
   String playAudioPath = ''; //저장할때 받아올 변수 , 재생 시 필요
 
+  //noise meter 패키지에서 필요한 것들 (from example code)
+  NoiseReading? _latestReading;
+  StreamSubscription<NoiseReading>? _noiseSubscription;
+  NoiseMeter? noiseMeter;
+
   @override
   void initState() {
     super.initState();
     initRecorder();
+    noiseMeterStart();
   }
 
   @override
   void dispose() {
     recorder.closeRecorder();
+    noiseMeterStop();
     super.dispose();
   }
 
@@ -61,6 +71,20 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
+        Container(
+          margin: EdgeInsets.only(top: 20),
+          child: Text(
+            isRecording ? "Mic: ON" : "Mic: OFF",
+            style: TextStyle(fontSize: 25, color: Colors.blue),
+          ),
+        ),
+        Container(
+          margin: EdgeInsets.only(top: 20),
+          child: Text(
+            'Noise: ${_latestReading?.meanDecibel.toStringAsFixed(2)} dB',
+          ),
+        ),
+        Text('Max: ${_latestReading?.maxDecibel.toStringAsFixed(2)} dB'),
 
         //radio buttons
         ListTile(
@@ -126,21 +150,64 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void onData(NoiseReading noiseReading) async {
+    if (!isRecording && noiseReading.meanDecibel > 60) {
+      await record();
+    }
+    if (isRecording && noiseReading.meanDecibel < 50) {
+      await stop();
+      UploadService uploadService = UploadService();
+      await uploadService.uploadAudioFile(
+        audioPath,
+        'mp3',
+        _selectedSituation == SelectedSituation.calibration
+            ? "calibration"
+            : _selectedSituation == SelectedSituation.motionGeneration
+            ? "motionGeneration"
+            : "viewMotion",
+      );
+    }
+    setState(() {
+      _latestReading = noiseReading;
+    });
+  }
+
+  void onError(Object error) {
+    print(error);
+    stop();
+  }
+
+  Future<bool> checkPermission() async => await Permission.microphone.isGranted;
+
+  Future<void> requestPermission() async =>
+      await Permission.microphone.request();
+
+  //record 관련 함수들
   //recorder initialization
   Future initRecorder() async {
-    final status = await Permission.microphone.request();
-
-    if (status != PermissionStatus.granted) {
-      throw "녹음 권한을 얻지 못했습니다.";
-    }
+    if (!(await checkPermission())) await requestPermission();
     await recorder.openRecorder();
 
     isRecording = true;
     recorder.setSubscriptionDuration(const Duration(milliseconds: 500));
   }
 
-  Future record() async {
+  Future<void> noiseMeterStart() async {
+    noiseMeter ??= NoiseMeter();
+    if (!(await checkPermission())) await requestPermission();
+    _noiseSubscription = noiseMeter?.noise.listen(onData, onError: onError);
+    setState(() => isRecording = true);
+  }
+
+  void noiseMeterStop() {
+    _noiseSubscription?.cancel();
+    setState(() => isRecording = false);
+  }
+
+  Future<void> record() async {
+    if (!(await checkPermission())) await requestPermission();
     await recorder.startRecorder(toFile: 'audio'); //codec 종류도 바꿀 수 있는 듯
+    setState(() => isRecording = true);
   }
 
   Future<void> stop() async {
@@ -150,7 +217,6 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       isRecording = false;
     });
-    print("stop called");
 
     final savedFilePath = await saveRecordingLocally();
     print("savedFilePath: $savedFilePath");
