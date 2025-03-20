@@ -35,12 +35,12 @@ class _HomeScreenState extends State<HomeScreen> {
   NoiseReading? _latestReading;
   StreamSubscription<NoiseReading>? _noiseSubscription;
   NoiseMeter? noiseMeter;
+  bool isNoiseMeterRecording = false;
 
   @override
   void initState() {
     super.initState();
     initRecorder();
-    noiseMeterStart();
   }
 
   @override
@@ -54,29 +54,29 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        SizedBox(
-          child: IconButton(
-            onPressed: () async {
-              if (recorder.isRecording) {
-                await stop();
-              } else {
-                await record();
-              }
-              setState(() {});
-            },
-            icon: Icon(
-              recorder.isRecording ? Icons.stop : Icons.mic,
-              size: 30,
-              color: Colors.black,
+        SizedBox(height: 10),
+        TextButton(
+          onPressed: () async {
+            if (isNoiseMeterRecording) {
+              noiseMeterStop();
+            } else {
+              await noiseMeterStart();
+            }
+            setState(() {});
+          },
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Text(
+              isNoiseMeterRecording ? 'Recording Off' : 'Recording On',
+              style: TextStyle(fontSize: 20),
             ),
           ),
         ),
         Container(
           margin: EdgeInsets.only(top: 20),
-          child: Text(
-            isRecording ? "Mic: ON" : "Mic: OFF",
-            style: TextStyle(fontSize: 25, color: Colors.blue),
-          ),
+          height: 80,
+          width: double.infinity,
+          color: isRecording ? Colors.red : Colors.blue,
         ),
         Container(
           margin: EdgeInsets.only(top: 20),
@@ -151,11 +151,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void onData(NoiseReading noiseReading) async {
-    if (!isRecording && noiseReading.meanDecibel > 60) {
-      await record();
+    setState(() {
+      _latestReading = noiseReading;
+    });
+    if (!recorder.isRecording && noiseReading.meanDecibel > 65) {
+      await Future.delayed(Duration(milliseconds: 100));
+
+      await recorder.startRecorder(toFile: 'audio');
+      setState(() => isRecording = true);
     }
-    if (isRecording && noiseReading.meanDecibel < 50) {
-      await stop();
+    if (recorder.isRecording && noiseReading.meanDecibel < 50) {
+      final path = await recorder.stopRecorder();
+      audioPath = path!;
+
+      setState(() {
+        isRecording = false;
+      });
+
+      final savedFilePath = await saveRecordingLocally();
+      print("savedFilePath: $savedFilePath");
       UploadService uploadService = UploadService();
       await uploadService.uploadAudioFile(
         audioPath,
@@ -167,14 +181,11 @@ class _HomeScreenState extends State<HomeScreen> {
             : "viewMotion",
       );
     }
-    setState(() {
-      _latestReading = noiseReading;
-    });
+    setState(() {});
   }
 
   void onError(Object error) {
     print(error);
-    stop();
   }
 
   Future<bool> checkPermission() async => await Permission.microphone.isGranted;
@@ -188,7 +199,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!(await checkPermission())) await requestPermission();
     await recorder.openRecorder();
 
-    isRecording = true;
     recorder.setSubscriptionDuration(const Duration(milliseconds: 500));
   }
 
@@ -196,30 +206,12 @@ class _HomeScreenState extends State<HomeScreen> {
     noiseMeter ??= NoiseMeter();
     if (!(await checkPermission())) await requestPermission();
     _noiseSubscription = noiseMeter?.noise.listen(onData, onError: onError);
-    setState(() => isRecording = true);
+    setState(() => isNoiseMeterRecording = true);
   }
 
   void noiseMeterStop() {
     _noiseSubscription?.cancel();
-    setState(() => isRecording = false);
-  }
-
-  Future<void> record() async {
-    if (!(await checkPermission())) await requestPermission();
-    await recorder.startRecorder(toFile: 'audio'); //codec 종류도 바꿀 수 있는 듯
-    setState(() => isRecording = true);
-  }
-
-  Future<void> stop() async {
-    final path = await recorder.stopRecorder();
-    audioPath = path!;
-
-    setState(() {
-      isRecording = false;
-    });
-
-    final savedFilePath = await saveRecordingLocally();
-    print("savedFilePath: $savedFilePath");
+    setState(() => isNoiseMeterRecording = false);
   }
 
   Future<String> saveRecordingLocally() async {
