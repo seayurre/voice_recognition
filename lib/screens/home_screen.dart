@@ -1,8 +1,9 @@
-//code inspired from https://velog.io/@yevvon/flutterdart-%EC%9D%8C%EC%84%B1-%EB%85%B9%EC%9D%8C-%EC%9E%AC%EC%83%9D
+// Recorder
+// NoiseMeter
+// SpeechToText
 
 import 'dart:async';
 
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart' as sound;
 import 'package:noise_meter/noise_meter.dart';
@@ -10,9 +11,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:voice_recognition/services/upload_service.dart';
 
 enum SelectedSituation { calibration, motionGeneration, viewMotion }
+
+const WAKE_WORD = "가나다라";
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -37,16 +43,24 @@ class _HomeScreenState extends State<HomeScreen> {
   NoiseMeter? noiseMeter;
   bool isNoiseMeterRecording = false;
 
+  //speech_to_text 패키지에서 필요한 것들
+  final SpeechToText _speechToText = SpeechToText(); //SpeechToText Object
+  bool _sttEnabled = false;
+  String _sttText = '';
+
   @override
   void initState() {
     super.initState();
-    initRecorder();
+    //initRecorder();
+    _initSTT();
+    //noiseMeterStart();
   }
 
   @override
   void dispose() {
     recorder.closeRecorder();
     noiseMeterStop();
+    _stopSTT();
     super.dispose();
   }
 
@@ -55,23 +69,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       children: [
         SizedBox(height: 10),
-        TextButton(
-          onPressed: () async {
-            if (isNoiseMeterRecording) {
-              noiseMeterStop();
-            } else {
-              await noiseMeterStart();
-            }
-            setState(() {});
-          },
-          child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            child: Text(
-              isNoiseMeterRecording ? 'Recording Off' : 'Recording On',
-              style: TextStyle(fontSize: 20),
-            ),
-          ),
-        ),
+        // TextButton(
+        //   onPressed: () async {
+        //     if (isNoiseMeterRecording) {
+        //       noiseMeterStop();
+        //     } else {
+        //       await noiseMeterStart();
+        //     }
+        //     setState(() {});
+        //   },
+        //   child: Container(
+        //     padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        //     child: Text(
+        //       isNoiseMeterRecording ? 'Recording Off' : 'Recording On',
+        //       style: TextStyle(fontSize: 20),
+        //     ),
+        //   ),
+        // ),
+
+        //recorder가 켜져 있는지 아닌지 알려주는 것
         Container(
           margin: EdgeInsets.only(top: 20),
           height: 80,
@@ -126,16 +142,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         GestureDetector(
           onTap: () async {
-            UploadService uploadService = UploadService();
-            await uploadService.uploadAudioFile(
-              audioPath,
-              'mp3',
-              _selectedSituation == SelectedSituation.calibration
-                  ? "calibration"
-                  : _selectedSituation == SelectedSituation.motionGeneration
-                  ? "motionGeneration"
-                  : "viewMotion",
-            );
+            if (_speechToText.isNotListening) {
+              await _startSTT();
+            } else {
+              _stopSTT();
+            }
           },
           child: Container(
             decoration: BoxDecoration(
@@ -143,24 +154,24 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.all(Radius.circular(10)),
             ),
             padding: EdgeInsets.symmetric(vertical: 10, horizontal: 40),
-            child: Text('Send Audio'),
+            child: Text(
+              _speechToText.isNotListening ? 'Start STT' : 'Stop STT',
+            ),
           ),
         ),
+        SizedBox(height: 16),
+        Text('stt word: $_sttText'),
       ],
     );
   }
 
-  void onData(NoiseReading noiseReading) async {
+  void noiseMeterOnData(NoiseReading noiseReading) async {
     setState(() {
       _latestReading = noiseReading;
     });
-    if (!recorder.isRecording && noiseReading.meanDecibel > 65) {
-      await Future.delayed(Duration(milliseconds: 100));
-
-      await recorder.startRecorder(toFile: 'audio');
-      setState(() => isRecording = true);
-    }
-    if (recorder.isRecording && noiseReading.meanDecibel < 50) {
+    if (isRecording && noiseReading.meanDecibel < 50) {
+      await Future.delayed(Duration(milliseconds: 2000));
+      //recorder 정지 및 파일 전송
       final path = await recorder.stopRecorder();
       audioPath = path!;
 
@@ -180,6 +191,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? "motionGeneration"
             : "viewMotion",
       );
+      noiseMeterStop();
     }
     setState(() {});
   }
@@ -193,8 +205,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> requestPermission() async =>
       await Permission.microphone.request();
 
-  //record 관련 함수들
-  //recorder initialization
   Future initRecorder() async {
     if (!(await checkPermission())) await requestPermission();
     await recorder.openRecorder();
@@ -205,13 +215,84 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> noiseMeterStart() async {
     noiseMeter ??= NoiseMeter();
     if (!(await checkPermission())) await requestPermission();
-    _noiseSubscription = noiseMeter?.noise.listen(onData, onError: onError);
+    _noiseSubscription = noiseMeter?.noise.listen(
+      noiseMeterOnData,
+      onError: onError,
+    );
     setState(() => isNoiseMeterRecording = true);
   }
 
   void noiseMeterStop() {
     _noiseSubscription?.cancel();
     setState(() => isNoiseMeterRecording = false);
+  }
+
+  void _initSTT() async {
+    if (!(await checkPermission())) await requestPermission();
+    _sttEnabled = await _speechToText.initialize(
+      onError: errorListener,
+      onStatus: statusListener,
+    );
+    print('Speech enabled: $_sttEnabled');
+    setState(() {});
+  }
+
+  Future _startSTT() async {
+    debugPrint("========================debug print=====================");
+    await _speechToText.listen(
+      listenFor: Duration(seconds: 10),
+      onResult: _onSpeechResult,
+      localeId: 'ko_KR',
+      listenOptions: SpeechListenOptions(
+        cancelOnError: false,
+        partialResults: true,
+        listenMode: ListenMode.dictation,
+      ),
+    );
+    setState(() {
+      _sttEnabled = true;
+    });
+  }
+
+  void _stopSTT() async {
+    await _speechToText.stop();
+    print('stop STT');
+    setState(() {
+      _sttEnabled = false;
+    });
+  }
+
+  void _onSpeechResult(SpeechRecognitionResult result) async {
+    print('-------speech result--------');
+    print(result.recognizedWords);
+    setState(() {
+      _sttText = result.recognizedWords;
+    });
+    // if (result.recognizedWords == WAKE_WORD) {
+    //   //완전히 동일하긴 어려우니 어느 정도 relaxation을 두어야 하는데...
+    //   print("으으아아ㅓㄻ나ㅣ어라ㅣㅁ너");
+    //   _stopSTT();
+    //   await recorder.startRecorder(toFile: 'audio');
+    //   noiseMeterStart();
+    //   setState(() => isRecording = true);
+    // }
+  }
+
+  void errorListener(SpeechRecognitionError error) async {
+    debugPrint(error.errorMsg.toString());
+    await Future.delayed(Duration(milliseconds: 500));
+  }
+
+  void statusListener(String status) async {
+    debugPrint("status $status");
+    if (status == "done" && _sttEnabled) {
+      //done이면 다시 시작
+      setState(() {
+        _sttText = "";
+        _sttEnabled = false;
+      });
+      await _startSTT();
+    }
   }
 
   Future<String> saveRecordingLocally() async {
